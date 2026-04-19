@@ -14,10 +14,9 @@ export async function POST(req: NextRequest) {
       ? `\nFor context, previous translations: ${recentContext.slice(-2).join(" | ")}`
       : "";
 
-    // Step 1: Vision + translation in one call using gpt-4o-mini
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      max_tokens: 800,
+      max_tokens: 1000,
       messages: [{
         role: "user",
         content: [
@@ -25,7 +24,7 @@ export async function POST(req: NextRequest) {
             type: "image_url",
             image_url: {
               url: `data:image/jpeg;base64,${imageBase64}`,
-              detail: "low", // fastest — sufficient for reading text
+              detail: "low",
             },
           },
           {
@@ -35,11 +34,12 @@ export async function POST(req: NextRequest) {
 Find ALL text on screen that is NOT in ${targetLanguageLabel} and translate it naturally.
 If everything is already in ${targetLanguageLabel} or there is no readable text, reply with exactly: EMPTY
 
-Otherwise reply with this JSON only — no markdown:
+Otherwise reply with this JSON only — no markdown, no code blocks:
 {
   "hasContent": true,
   "detectedLanguages": ["language names"],
-  "translation": "natural fluent translation here",
+  "detectedText": "the original untranslated text found on screen, exactly as it appears",
+  "translation": "natural fluent translation into ${targetLanguageLabel}",
   "summary": "one sentence describing what is on screen in ${targetLanguageLabel}"
 }`,
           },
@@ -57,19 +57,26 @@ Otherwise reply with this JSON only — no markdown:
     try {
       result = JSON.parse(raw.replace(/```json|```/g, "").trim());
     } catch {
-      result = { hasContent: true, detectedLanguages: ["unknown"], translation: raw, summary: "" };
+      // If JSON parse fails treat the whole response as the translation
+      result = {
+        hasContent: true,
+        detectedLanguages: ["unknown"],
+        detectedText: raw,
+        translation: raw,
+        summary: "",
+      };
     }
 
     if (!result.hasContent || !result.translation?.trim()) {
       return NextResponse.json({ hasContent: false });
     }
 
-    // Step 2: TTS — runs after translation is parsed
+    // TTS — runs after translation is ready
     const tts = await openai.audio.speech.create({
       model: "tts-1",
       voice: "nova",
-      input: result.translation.slice(0, 1000), // cap length for speed
-      speed: 1.1, // slightly faster speech
+      input: result.translation.slice(0, 1000),
+      speed: 1.1,
     });
 
     const audioBase64 = Buffer.from(await tts.arrayBuffer()).toString("base64");
